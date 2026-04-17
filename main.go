@@ -21,6 +21,19 @@ func main() {
 		return
 	}
 
+	// Handle init subcommand
+	if flag.NArg() > 0 && flag.Arg(0) == "init" {
+		dir := "."
+		if flag.NArg() > 1 {
+			dir = flag.Arg(1)
+		}
+		if err := runInit(dir); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if os.Getenv("NO_COLOR") != "" {
 		*noColor = true
 	}
