@@ -1,10 +1,12 @@
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+
 .PHONY: build install test test-e2e
 
 build:
-	go build -o reposcan .
+	go build -ldflags "-X main.version=$(VERSION)" -o reposcan .
 
 install:
-	go install .
+	go install -ldflags "-X main.version=$(VERSION)" .
 
 test:
 	go test ./...
