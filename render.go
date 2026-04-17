@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"time"
 )
 
 const (
 	reset     = "\033[0m"
 	bold      = "\033[1m"
+	dim       = "\033[2m"
 	red       = "\033[31m"
 	green     = "\033[32m"
 	yellow    = "\033[33m"
@@ -31,86 +33,117 @@ func Render(result ScanResult, w io.Writer, noColor bool) {
 		fmt.Fprint(w, clearScr)
 	}
 
-	cleanCount := 0
+	cleanCounts := make(map[string]int)
 	groupNames := sortedKeys(result.Groups)
 
 	for _, groupName := range groupNames {
 		repos := result.Groups[groupName]
-		var activeRepos []RepoResult
 		for _, repo := range repos {
-			if isCleanNoWorktrees(repo) {
-				cleanCount++
-			} else {
-				activeRepos = append(activeRepos, repo)
+			if isFullyClean(repo) {
+				cleanCounts[groupName]++
+				continue
 			}
-		}
-		if len(activeRepos) == 0 {
-			continue
-		}
+			// Repo line: [group] repo-name  main-status
+			mainStatus := mainWorktreeStatus(repo, c)
+			fmt.Fprintf(w, "%s %s %s\n", c(dim, "["+groupName+"]"), c(cyan, repo.Name), mainStatus)
 
-		fmt.Fprintf(w, "\n%s\n", c(boldWhite, "═══ "+groupName+" ═══"))
-		for _, repo := range activeRepos {
-			fmt.Fprintf(w, "  %s\n", c(cyan, repo.Name))
+			// Non-main worktrees on one line, skip clean ones
+			var wtParts []string
 			for _, wt := range repo.Worktrees {
-				prefix := "  ├─"
 				if wt.IsMain {
-					prefix = "  ├─"
+					continue
 				}
-				branchStr := c(blue, wt.Branch)
-				statusStr := formatStatus(wt.Status, c)
-				fmt.Fprintf(w, "  %s %s %s\n", prefix, branchStr, statusStr)
+				s := compactWorktree(wt, c)
+				if s != "" {
+					wtParts = append(wtParts, s)
+				}
+			}
+			if len(wtParts) > 0 {
+				fmt.Fprintf(w, "  %s\n", strings.Join(wtParts, c(dim, " │ ")))
 			}
 		}
 	}
 
-	// Clean repos summary
-	if cleanCount > 0 {
-		fmt.Fprintf(w, "\n%s\n", c(green, fmt.Sprintf("✓ %d repos clean (no worktrees)", cleanCount)))
+	// Clean summary — one line
+	var cleanParts []string
+	for _, g := range groupNames {
+		if n := cleanCounts[g]; n > 0 {
+			cleanParts = append(cleanParts, fmt.Sprintf("%s:%d", g, n))
+		}
+	}
+	if len(cleanParts) > 0 {
+		fmt.Fprintf(w, "%s\n", c(green, "✓ clean "+strings.Join(cleanParts, " ")))
 	}
 
 	// Footer
-	fmt.Fprintf(w, "\n%s  %s\n",
-		c(bold, fmt.Sprintf("Scanned in %s", result.Duration.Round(time.Millisecond))),
-		time.Now().Format("15:04:05"))
+	fmt.Fprintf(w, "%s %s\n",
+		c(dim, result.Duration.Round(time.Millisecond).String()),
+		c(dim, time.Now().Format("15:04:05")))
 }
 
-func formatStatus(s WorktreeStatus, c func(string, string) string) string {
+func mainWorktreeStatus(repo RepoResult, c func(string, string) string) string {
+	for _, wt := range repo.Worktrees {
+		if wt.IsMain {
+			return compactStatus(wt.Status, c)
+		}
+	}
+	return ""
+}
+
+func compactWorktree(wt WorktreeResult, c func(string, string) string) string {
+	s := wt.Status
+	// Skip clean worktrees with no ahead/behind
 	if s.Modified == 0 && s.Staged == 0 && s.Untracked == 0 && s.Ahead == 0 && s.Behind == 0 {
-		return c(green, "✓ clean")
+		return ""
+	}
+	branch := shortBranch(wt.Branch)
+	return c(blue, branch) + " " + compactStatus(s, c)
+}
+
+func compactStatus(s WorktreeStatus, c func(string, string) string) string {
+	if s.Modified == 0 && s.Staged == 0 && s.Untracked == 0 && s.Ahead == 0 && s.Behind == 0 {
+		return c(green, "✓")
 	}
 	var parts []string
 	if s.Modified > 0 {
-		parts = append(parts, c(red, fmt.Sprintf("M:%d", s.Modified)))
+		parts = append(parts, c(red, fmt.Sprintf("M%d", s.Modified)))
 	}
 	if s.Staged > 0 {
-		parts = append(parts, c(green, fmt.Sprintf("S:%d", s.Staged)))
+		parts = append(parts, c(green, fmt.Sprintf("S%d", s.Staged)))
 	}
 	if s.Untracked > 0 {
-		parts = append(parts, c(yellow, fmt.Sprintf("U:%d", s.Untracked)))
+		parts = append(parts, c(yellow, fmt.Sprintf("U%d", s.Untracked)))
 	}
 	if s.Ahead > 0 {
-		parts = append(parts, c(green, fmt.Sprintf("+%d", s.Ahead)))
+		parts = append(parts, c(green, fmt.Sprintf("↑%d", s.Ahead)))
 	}
 	if s.Behind > 0 {
-		parts = append(parts, c(red, fmt.Sprintf("-%d", s.Behind)))
+		parts = append(parts, c(red, fmt.Sprintf("↓%d", s.Behind)))
 	}
-	result := ""
-	for i, p := range parts {
-		if i > 0 {
-			result += " "
-		}
-		result += p
-	}
-	return result
+	return strings.Join(parts, " ")
 }
 
-func isCleanNoWorktrees(repo RepoResult) bool {
+// shortBranch strips common prefixes to save space
+func shortBranch(branch string) string {
+	for _, prefix := range []string{"feature-", "feat-", "bugfix-", "hotfix-", "release-"} {
+		if strings.HasPrefix(branch, prefix) {
+			return branch[len(prefix):]
+		}
+	}
+	return branch
+}
+
+// isFullyClean returns true if repo has only main worktree and it's clean
+func isFullyClean(repo RepoResult) bool {
 	if len(repo.Worktrees) != 1 {
 		return false
 	}
 	wt := repo.Worktrees[0]
-	return wt.IsMain && wt.Status.Modified == 0 && wt.Status.Staged == 0 &&
-		wt.Status.Untracked == 0 && wt.Status.Ahead == 0 && wt.Status.Behind == 0
+	return wt.IsMain && wt.Status == (WorktreeStatus{})
+}
+
+func isCleanNoWorktrees(repo RepoResult) bool {
+	return isFullyClean(repo)
 }
 
 func sortedKeys(m map[string][]RepoResult) []string {

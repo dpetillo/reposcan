@@ -111,11 +111,11 @@ func TestE2EFullScanPipeline(t *testing.T) {
 	var buf bytes.Buffer
 	Render(result, &buf, true)
 	out := buf.String()
-	if !strings.Contains(out, "═══ core ═══") {
-		t.Error("missing core group header")
+	if !strings.Contains(out, "[core]") {
+		t.Error("missing core group label")
 	}
-	if !strings.Contains(out, "1 repos clean") {
-		t.Errorf("should show 1 clean repo, got:\n%s", out)
+	if !strings.Contains(out, "test:1") {
+		t.Errorf("should show test:1 in clean summary, got:\n%s", out)
 	}
 }
 
