@@ -21,13 +21,17 @@ func main() {
 		return
 	}
 
-	// Handle init subcommand
+	// Handle init subcommand: reposcan init [dir] [-g gitlab-group]
 	if flag.NArg() > 0 && flag.Arg(0) == "init" {
+		initFlags := flag.NewFlagSet("init", flag.ExitOnError)
+		gitlabGroup := initFlags.String("g", "", "GitLab group path (e.g., directbook1)")
+		initFlags.Parse(flag.Args()[1:])
+
 		dir := "."
-		if flag.NArg() > 1 {
-			dir = flag.Arg(1)
+		if initFlags.NArg() > 0 {
+			dir = initFlags.Arg(0)
 		}
-		if err := runInit(dir); err != nil {
+		if err := runInit(dir, *gitlabGroup); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}

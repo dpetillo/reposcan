@@ -1,6 +1,6 @@
 # reposcan
 
-A read-only Git worktree dashboard. Monitors multiple repos, groups worktrees under their parent repos, and shows branch status with colored output.
+A read-only Git worktree dashboard. Monitors multiple repos organized by groups, shows worktrees nested under their parent repos with branch status and colored output.
 
 ## Install
 
@@ -17,8 +17,11 @@ make install
 ## Quick Start
 
 ```bash
-# Generate config from a directory of repos
+# Generate config from GitLab group hierarchy
 cd ~/Dev/directbook1
+reposcan init . -g directbook1
+
+# Or generate from local filesystem structure
 reposcan init .
 
 # Run the dashboard (refreshes every 10s)
@@ -26,9 +29,6 @@ reposcan
 
 # Single scan, no loop
 reposcan -once
-
-# Custom config
-reposcan -c /path/to/config.yaml
 ```
 
 ## Config
@@ -36,15 +36,20 @@ reposcan -c /path/to/config.yaml
 `config.yaml` (looked up in cwd, then `~/.config/reposcan/config.yaml`):
 
 ```yaml
+gitlab_group: directbook1
+groups:
+  - name: Core Platform
+    path: ~/Dev/directbook1/core
+  - name: SysOps
+    path: ~/Dev/directbook1/sysops
+  - name: Test
+    path: ~/Dev/directbook1/test
+  - name: (root)
+    path: ~/Dev/directbook1
 interval: 10
-repos:
-  - path: ~/Dev/directbook1/core-monorepo
-    group: core
-  - path: ~/Dev/directbook1/ghost-monorepo
-    group: ghost
-  - path: ~/Dev/directbook1/cloudflare-pipeline
-    group: sysops
 ```
+
+Each group points to a directory containing repos. Repos are flat within the group directory. Worktrees are siblings of their parent repo at the same level — they're auto-discovered via `git worktree list`, not listed in config.
 
 ## Flags
 
@@ -54,6 +59,12 @@ repos:
 | `-once` | Scan once and exit |
 | `--no-color` | Disable colored output |
 | `-version` | Print version |
+
+### init subcommand
+
+| Flag | Description |
+|------|-------------|
+| `-g <group>` | GitLab group path (uses `glab` API to discover hierarchy) |
 
 `NO_COLOR` env var also disables colors.
 

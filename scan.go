@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -14,7 +15,6 @@ type WorktreeResult struct {
 type RepoResult struct {
 	Name      string
 	Path      string
-	Group     string
 	Worktrees []WorktreeResult
 }
 
@@ -25,31 +25,68 @@ type ScanResult struct {
 
 func RunScan(cfg Config) ScanResult {
 	start := time.Now()
-	results := make([]RepoResult, len(cfg.Repos))
+	groups := make(map[string][]RepoResult)
+	var mu sync.Mutex
 	var wg sync.WaitGroup
 
-	for i, repo := range cfg.Repos {
+	for _, g := range cfg.Groups {
 		wg.Add(1)
-		go func(idx int, r Repo) {
+		go func(grp Group) {
 			defer wg.Done()
-			results[idx] = scanRepo(r)
-		}(i, repo)
+			repos := discoverAndScanGroup(grp)
+			mu.Lock()
+			groups[grp.Name] = repos
+			mu.Unlock()
+		}(g)
 	}
 	wg.Wait()
 
-	return ScanResult{
-		Groups:   groupResults(results),
-		Duration: time.Since(start),
-	}
+	return ScanResult{Groups: groups, Duration: time.Since(start)}
 }
 
-func scanRepo(r Repo) RepoResult {
-	rr := RepoResult{
-		Name:  filepath.Base(r.Path),
-		Path:  r.Path,
-		Group: r.Group,
+func discoverAndScanGroup(g Group) []RepoResult {
+	entries, err := os.ReadDir(g.Path)
+	if err != nil {
+		return nil
 	}
-	wts, err := ScanWorktrees(r.Path)
+
+	// Find repos (dirs with .git directory, not .git file)
+	var repoPaths []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		gitPath := filepath.Join(g.Path, e.Name(), ".git")
+		info, err := os.Stat(gitPath)
+		if err != nil {
+			continue
+		}
+		if info.IsDir() {
+			repoPaths = append(repoPaths, filepath.Join(g.Path, e.Name()))
+		}
+		// .git file = worktree, skip — it belongs to a parent repo
+	}
+
+	// Scan repos in parallel
+	results := make([]RepoResult, len(repoPaths))
+	var wg sync.WaitGroup
+	for i, rp := range repoPaths {
+		wg.Add(1)
+		go func(idx int, repoPath string) {
+			defer wg.Done()
+			results[idx] = scanRepo(repoPath)
+		}(i, rp)
+	}
+	wg.Wait()
+	return results
+}
+
+func scanRepo(repoPath string) RepoResult {
+	rr := RepoResult{
+		Name: filepath.Base(repoPath),
+		Path: repoPath,
+	}
+	wts, err := ScanWorktrees(repoPath)
 	if err != nil {
 		return rr
 	}
@@ -58,16 +95,4 @@ func scanRepo(r Repo) RepoResult {
 		rr.Worktrees = append(rr.Worktrees, WorktreeResult{Worktree: wt, Status: st})
 	}
 	return rr
-}
-
-func groupResults(results []RepoResult) map[string][]RepoResult {
-	groups := make(map[string][]RepoResult)
-	for _, r := range results {
-		g := r.Group
-		if g == "" {
-			g = "default"
-		}
-		groups[g] = append(groups[g], r)
-	}
-	return groups
 }

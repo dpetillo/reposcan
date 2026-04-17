@@ -1,43 +1,81 @@
 package main
 
-import "testing"
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+)
 
-func TestGroupResults(t *testing.T) {
-	results := []RepoResult{
-		{Name: "repo1", Group: "core"},
-		{Name: "repo2", Group: "core"},
-		{Name: "repo3", Group: "test"},
-		{Name: "repo4", Group: ""},
+func TestDiscoverAndScanGroupFindsRepos(t *testing.T) {
+	tmp := t.TempDir()
+
+	// Create two repos in the group dir
+	for _, name := range []string{"repo-a", "repo-b"} {
+		rp := filepath.Join(tmp, name)
+		os.MkdirAll(filepath.Join(rp, ".git"), 0755)
 	}
-	groups := groupResults(results)
-	if len(groups["core"]) != 2 {
-		t.Errorf("core group = %d repos, want 2", len(groups["core"]))
-	}
-	if len(groups["test"]) != 1 {
-		t.Errorf("test group = %d repos, want 1", len(groups["test"]))
-	}
-	if len(groups["default"]) != 1 {
-		t.Errorf("default group = %d repos, want 1", len(groups["default"]))
+	// Create a worktree dir (has .git file, not dir) — should be skipped
+	wtDir := filepath.Join(tmp, "repo-a-feature")
+	os.MkdirAll(wtDir, 0755)
+	os.WriteFile(filepath.Join(wtDir, ".git"), []byte("gitdir: ../repo-a/.git/worktrees/feat"), 0644)
+
+	results := discoverAndScanGroup(Group{Name: "test", Path: tmp})
+	if len(results) != 2 {
+		names := make([]string, len(results))
+		for i, r := range results {
+			names[i] = r.Name
+		}
+		t.Fatalf("got %d repos %v, want 2 (repo-a, repo-b)", len(results), names)
 	}
 }
 
-func TestGroupResultsEmpty(t *testing.T) {
-	groups := groupResults(nil)
-	if len(groups) != 0 {
-		t.Errorf("expected empty groups, got %d", len(groups))
+func TestDiscoverAndScanGroupSkipsNonRepos(t *testing.T) {
+	tmp := t.TempDir()
+
+	// Regular dir (no .git)
+	os.MkdirAll(filepath.Join(tmp, "not-a-repo"), 0755)
+	// File
+	os.WriteFile(filepath.Join(tmp, "file.txt"), []byte("hi"), 0644)
+
+	results := discoverAndScanGroup(Group{Name: "test", Path: tmp})
+	if len(results) != 0 {
+		t.Errorf("got %d repos, want 0", len(results))
 	}
 }
 
-func TestGroupResultsSingleGroup(t *testing.T) {
-	results := []RepoResult{
-		{Name: "a", Group: "infra"},
-		{Name: "b", Group: "infra"},
+func TestDiscoverAndScanGroupBadPath(t *testing.T) {
+	results := discoverAndScanGroup(Group{Name: "test", Path: "/nonexistent"})
+	if results != nil {
+		t.Errorf("expected nil for bad path, got %d results", len(results))
 	}
-	groups := groupResults(results)
-	if len(groups) != 1 {
-		t.Errorf("expected 1 group, got %d", len(groups))
+}
+
+func TestScanRepoWithWorktrees(t *testing.T) {
+	tmp := t.TempDir()
+	repoPath := filepath.Join(tmp, "myrepo")
+
+	cmd := exec.Command("git", "init", repoPath)
+	cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=<email>",
+		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=<email>")
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("git init: %v", err)
 	}
-	if len(groups["infra"]) != 2 {
-		t.Errorf("infra group = %d repos, want 2", len(groups["infra"]))
+	os.WriteFile(filepath.Join(repoPath, "f.txt"), []byte("x"), 0644)
+	cmd = exec.Command("git", "add", ".")
+	cmd.Dir = repoPath
+	cmd.Run()
+	cmd = exec.Command("git", "commit", "-m", "init")
+	cmd.Dir = repoPath
+	cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=<email>",
+		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=<email>")
+	cmd.Run()
+
+	rr := scanRepo(repoPath)
+	if rr.Name != "myrepo" {
+		t.Errorf("name = %q, want myrepo", rr.Name)
+	}
+	if len(rr.Worktrees) < 1 {
+		t.Errorf("worktrees = %d, want >= 1", len(rr.Worktrees))
 	}
 }

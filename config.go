@@ -8,14 +8,15 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-type Repo struct {
-	Path  string `yaml:"path"`
-	Group string `yaml:"group"`
+type Group struct {
+	Name string `yaml:"name"`
+	Path string `yaml:"path"`
 }
 
 type Config struct {
-	Repos    []Repo `yaml:"repos"`
-	Interval int    `yaml:"interval"`
+	GitlabGroup string  `yaml:"gitlab_group,omitempty"`
+	Groups      []Group `yaml:"groups"`
+	Interval    int     `yaml:"interval"`
 }
 
 const defaultInterval = 10
@@ -42,19 +43,16 @@ func parseConfig(data []byte) (Config, error) {
 	if cfg.Interval <= 0 {
 		cfg.Interval = defaultInterval
 	}
-	// Expand ~ in repo paths
-	for i := range cfg.Repos {
-		cfg.Repos[i].Path = expandHome(cfg.Repos[i].Path)
+	for i := range cfg.Groups {
+		cfg.Groups[i].Path = expandHome(cfg.Groups[i].Path)
 	}
 	return cfg, nil
 }
 
 func findConfig() string {
-	// 1. cwd/config.yaml
 	if _, err := os.Stat("config.yaml"); err == nil {
 		return "config.yaml"
 	}
-	// 2. ~/.config/reposcan/config.yaml
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""

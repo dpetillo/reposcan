@@ -38,138 +38,136 @@ func setupTestRepo(t *testing.T, dir, name string) string {
 func TestE2EFullScanPipeline(t *testing.T) {
 	tmp := t.TempDir()
 
-	// Create 3 repos: 2 in a subdir (for grouping), 1 at top level
-	subdir := filepath.Join(tmp, "mygroup")
-	os.MkdirAll(subdir, 0755)
+	// Create group dirs with repos
+	coreDir := filepath.Join(tmp, "core")
+	testDir := filepath.Join(tmp, "test")
+	os.MkdirAll(coreDir, 0755)
+	os.MkdirAll(testDir, 0755)
 
-	repo1 := setupTestRepo(t, subdir, "repo1")
-	repo2 := setupTestRepo(t, subdir, "repo2")
-	repo3 := setupTestRepo(t, tmp, "standalone")
+	repo1 := setupTestRepo(t, coreDir, "repo1")
+	setupTestRepo(t, coreDir, "repo2")
+	setupTestRepo(t, testDir, "test-repo")
 
-	// Add a worktree to repo1
-	gitInDir(repo1, "worktree", "add", filepath.Join(tmp, "mygroup", "repo1-feat"), "-b", "feat-branch")
+	// Add a worktree to repo1 (sibling in the group dir)
+	gitInDir(repo1, "worktree", "add", filepath.Join(coreDir, "repo1-feat"), "-b", "feat-branch")
 
 	// Dirty a file in repo2
-	os.WriteFile(filepath.Join(repo2, "dirty.txt"), []byte("changed"), 0644)
+	os.WriteFile(filepath.Join(coreDir, "repo2", "dirty.txt"), []byte("changed"), 0644)
 
-	// Build config
 	cfg := Config{
-		Repos: []Repo{
-			{Path: repo1, Group: "mygroup"},
-			{Path: repo2, Group: "mygroup"},
-			{Path: repo3, Group: "default"},
+		Groups: []Group{
+			{Name: "core", Path: coreDir},
+			{Name: "test", Path: testDir},
 		},
 		Interval: 10,
 	}
 
-	// Run scan
 	result := RunScan(cfg)
 
-	// Verify repo1 has worktrees (main + feat-branch)
+	// Verify core group has repos
+	coreRepos := result.Groups["core"]
+	if len(coreRepos) == 0 {
+		t.Fatal("core group has no repos")
+	}
+
+	// Find repo1 — should have worktrees
 	var repo1Result *RepoResult
-	for _, repos := range result.Groups {
-		for i := range repos {
-			if repos[i].Name == "repo1" {
-				repo1Result = &repos[i]
-			}
+	for i := range coreRepos {
+		if coreRepos[i].Name == "repo1" {
+			repo1Result = &coreRepos[i]
 		}
 	}
 	if repo1Result == nil {
-		t.Fatal("repo1 not found in results")
+		t.Fatal("repo1 not found in core group")
 	}
 	if len(repo1Result.Worktrees) < 2 {
 		t.Errorf("repo1 worktrees = %d, want >= 2", len(repo1Result.Worktrees))
 	}
 
-	// Verify repo2 shows modified count
+	// Find repo2 — should show dirty status
 	var repo2Result *RepoResult
-	for _, repos := range result.Groups {
-		for i := range repos {
-			if repos[i].Name == "repo2" {
-				repo2Result = &repos[i]
-			}
+	for i := range coreRepos {
+		if coreRepos[i].Name == "repo2" {
+			repo2Result = &coreRepos[i]
 		}
 	}
 	if repo2Result == nil {
-		t.Fatal("repo2 not found in results")
+		t.Fatal("repo2 not found in core group")
 	}
-	if len(repo2Result.Worktrees) == 0 {
-		t.Fatal("repo2 should have at least 1 worktree (main)")
-	}
-	if repo2Result.Worktrees[0].Status.Untracked < 1 {
-		t.Errorf("repo2 untracked = %d, want >= 1", repo2Result.Worktrees[0].Status.Untracked)
+	if len(repo2Result.Worktrees) == 0 || repo2Result.Worktrees[0].Status.Untracked < 1 {
+		t.Error("repo2 should have untracked files")
 	}
 
-	// Verify standalone (clean, no extra worktrees) is collapsible
-	var standaloneResult *RepoResult
-	for _, repos := range result.Groups {
-		for i := range repos {
-			if repos[i].Name == "standalone" {
-				standaloneResult = &repos[i]
-			}
-		}
+	// test-repo should be clean with no extra worktrees
+	testRepos := result.Groups["test"]
+	if len(testRepos) != 1 {
+		t.Fatalf("test group repos = %d, want 1", len(testRepos))
 	}
-	if standaloneResult == nil {
-		t.Fatal("standalone not found in results")
-	}
-	if !isCleanNoWorktrees(*standaloneResult) {
-		t.Error("standalone should be clean with no extra worktrees")
+	if !isCleanNoWorktrees(testRepos[0]) {
+		t.Error("test-repo should be clean with no extra worktrees")
 	}
 
-	// Verify render output
+	// Verify render
 	var buf bytes.Buffer
 	Render(result, &buf, true)
 	out := buf.String()
-
-	if !strings.Contains(out, "mygroup") {
-		t.Error("render should contain group header 'mygroup'")
+	if !strings.Contains(out, "═══ core ═══") {
+		t.Error("missing core group header")
 	}
 	if !strings.Contains(out, "1 repos clean") {
-		t.Errorf("render should show 1 clean repo, got:\n%s", out)
-	}
-	if strings.Contains(out, "standalone") {
-		t.Error("standalone should be collapsed, not shown individually")
+		t.Errorf("should show 1 clean repo, got:\n%s", out)
 	}
 }
 
-func TestE2EInitCommand(t *testing.T) {
+func TestE2EInitLocal(t *testing.T) {
 	tmp := t.TempDir()
 
-	// Create repos in subdirs
-	subdir := filepath.Join(tmp, "infra")
-	os.MkdirAll(subdir, 0755)
-	setupTestRepo(t, subdir, "terraform")
-	setupTestRepo(t, subdir, "ansible")
+	// Create group dirs with repos
+	infraDir := filepath.Join(tmp, "infra")
+	os.MkdirAll(infraDir, 0755)
+	setupTestRepo(t, infraDir, "terraform")
+	setupTestRepo(t, infraDir, "ansible")
+
+	// Root-level repo
 	setupTestRepo(t, tmp, "toplevel")
 
-	// Also create a worktree (should be skipped by init)
-	topRepo := filepath.Join(tmp, "toplevel")
-	gitInDir(topRepo, "worktree", "add", filepath.Join(tmp, "toplevel-wt"), "-b", "wt-branch")
+	// Worktree at root (should not be treated as a group)
+	gitInDir(filepath.Join(tmp, "toplevel"), "worktree", "add", filepath.Join(tmp, "toplevel-wt"), "-b", "wt-branch")
 
-	// Run discover
-	repos, err := discoverRepos(tmp)
+	// Save cwd and change to a temp output dir
+	outDir := t.TempDir()
+	orig, _ := os.Getwd()
+	os.Chdir(outDir)
+	defer os.Chdir(orig)
+
+	err := runInit(tmp, "")
 	if err != nil {
-		t.Fatalf("discoverRepos: %v", err)
+		t.Fatalf("runInit: %v", err)
 	}
 
-	// Should find 3 repos, not the worktree
-	if len(repos) != 3 {
-		names := make([]string, len(repos))
-		for i, r := range repos {
-			names[i] = r.Path
-		}
-		t.Fatalf("found %d repos (want 3): %v", len(repos), names)
+	// Read generated config
+	data, err := os.ReadFile("config.yaml")
+	if err != nil {
+		t.Fatalf("reading config.yaml: %v", err)
+	}
+	cfg, err := parseConfig(data)
+	if err != nil {
+		t.Fatalf("parsing generated config: %v", err)
 	}
 
-	// Verify grouping
-	groupMap := make(map[string]int)
-	for _, r := range repos {
-		groupMap[r.Group]++
+	// Should have 2 groups: infra + (root)
+	if len(cfg.Groups) != 2 {
+		t.Fatalf("groups = %d, want 2", len(cfg.Groups))
 	}
-	if groupMap["infra"] != 2 {
-		t.Errorf("infra group = %d repos, want 2", groupMap["infra"])
+
+	groupNames := make(map[string]bool)
+	for _, g := range cfg.Groups {
+		groupNames[g.Name] = true
 	}
-	if groupMap["default"] != 1 {
-		t.Errorf("default group = %d repos, want 1", groupMap["default"])
+	if !groupNames["infra"] {
+		t.Error("missing infra group")
+	}
+	if !groupNames["(root)"] {
+		t.Error("missing (root) group")
 	}
 }
